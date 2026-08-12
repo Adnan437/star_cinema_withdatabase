@@ -117,12 +117,16 @@ try:
 except Exception as e:
     header("Database connection error")
     st.error(
-        "Could not connect to Supabase. Please make sure:\n\n"
-        "1. Your Supabase credentials are configured in Streamlit secrets or environment variables.\n"
-        "2. `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are set.\n"
-        "3. The Supabase tables have been created using `schema.sql`.\n\n"
-        f"Technical detail: {e}"
+        "Could not connect to Supabase. Please check the following:\n\n"
+        "1. You have added Supabase credentials to Streamlit secrets or environment variables.\n"
+        "2. You are using one of these supported names:\n"
+        "   - `supabase.url` and `supabase.key`\n"
+        "   - `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`\n"
+        "   - `SUPABASE_URL` and `SUPABASE_KEY`\n"
+        "3. The required tables exist in Supabase (run `schema.sql`).\n\n"
+        "If credentials are set, verify the URL and key are correct and that the Supabase project is reachable."
     )
+    st.markdown(f"**Technical detail:** {e}")
     st.stop()
 
 # ---------------------------------------------------------------------------
