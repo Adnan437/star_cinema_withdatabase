@@ -20,12 +20,19 @@ def get_supabase_client() -> Client:
         url = st.secrets["supabase"].get("url")
         key = st.secrets["supabase"].get("key")
 
-    url = url or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
-    key = key or os.environ.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
+    if not url:
+        url = st.secrets.get("NEXT_PUBLIC_SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
+    if not key:
+        key = st.secrets.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") or st.secrets.get("SUPABASE_KEY")
+
+    url = url or os.environ.get("NEXT_PUBLIC_SUPABASE_URL") or os.environ.get("SUPABASE_URL")
+    key = key or os.environ.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") or os.environ.get("SUPABASE_KEY")
 
     if not url or not key:
         raise RuntimeError(
-            "Supabase credentials are missing. Set them in Streamlit secrets or environment variables."
+            "Supabase credentials are missing. Set them in Streamlit secrets or environment variables. "
+            "Valid names are: supabase.url / supabase.key, NEXT_PUBLIC_SUPABASE_URL, "
+            "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL, or SUPABASE_KEY."
         )
 
     return create_client(url, key)

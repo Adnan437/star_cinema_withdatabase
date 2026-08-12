@@ -6,7 +6,7 @@ Star Cinema is a Streamlit ticket-booking app that now uses Supabase Postgres fo
 
 1. Add your Supabase credentials to Streamlit secrets or environment variables.
 
-   Example `.streamlit/secrets.toml`:
+   Example `.streamlit/secrets.toml` nested format:
 
    ```toml
    [supabase]
@@ -14,10 +14,19 @@ Star Cinema is a Streamlit ticket-booking app that now uses Supabase Postgres fo
    key = "sb_publishable_rQxKrFKr4RuU-z0Pfs8fUg_FG2yKPHh"
    ```
 
-   Or set locally:
+   Or top-level secrets:
+
+   ```toml
+   NEXT_PUBLIC_SUPABASE_URL = "https://sxvzmyjwxjldqrzcqzju.supabase.co"
+   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_rQxKrFKr4RuU-z0Pfs8fUg_FG2yKPHh"
+   ```
+
+   Or environment variables:
 
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+   - `SUPABASE_URL`
+   - `SUPABASE_KEY`
 
 2. Install dependencies:
 
