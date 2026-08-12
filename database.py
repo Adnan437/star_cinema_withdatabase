@@ -15,24 +15,57 @@ def get_supabase_client() -> Client:
     """Return an authenticated Supabase client using Streamlit secrets or env vars."""
     url = None
     key = None
+    url_source = None
+    key_source = None
 
-    if "supabase" in st.secrets:
+    # Nested secret section: [supabase]
+    if "supabase" in st.secrets and isinstance(st.secrets["supabase"], dict):
         url = st.secrets["supabase"].get("url")
         key = st.secrets["supabase"].get("key")
+        if url:
+            url_source = "st.secrets[supabase].url"
+        if key:
+            key_source = "st.secrets[supabase].key"
 
+    # Top-level secrets
     if not url:
-        url = st.secrets.get("NEXT_PUBLIC_SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
+        for name in ["SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL", "supabase_url"]:
+            if name in st.secrets:
+                url = st.secrets[name]
+                url_source = f"st.secrets[{name}]"
+                break
     if not key:
-        key = st.secrets.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") or st.secrets.get("SUPABASE_KEY")
+        for name in ["SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "supabase_key"]:
+            if name in st.secrets:
+                key = st.secrets[name]
+                key_source = f"st.secrets[{name}]"
+                break
 
-    url = url or os.environ.get("NEXT_PUBLIC_SUPABASE_URL") or os.environ.get("SUPABASE_URL")
-    key = key or os.environ.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") or os.environ.get("SUPABASE_KEY")
+    # Environment variables
+    if not url:
+        for name in ["SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL", "supabase_url"]:
+            value = os.environ.get(name)
+            if value:
+                url = value
+                url_source = f"env:{name}"
+                break
+    if not key:
+        for name in ["SUPABASE_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "supabase_key"]:
+            value = os.environ.get(name)
+            if value:
+                key = value
+                key_source = f"env:{name}"
+                break
 
     if not url or not key:
         raise RuntimeError(
             "Supabase credentials are missing. Set them in Streamlit secrets or environment variables. "
-            "Valid names are: supabase.url / supabase.key, NEXT_PUBLIC_SUPABASE_URL, "
-            "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL, or SUPABASE_KEY."
+            "Supported names are:\n"
+            "  - [supabase] section: supabase.url, supabase.key\n"
+            "  - top-level secrets: SUPABASE_URL, SUPABASE_KEY\n"
+            "  - top-level secrets: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY\n"
+            "  - environment vars: SUPABASE_URL, SUPABASE_KEY, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY\n"
+            f"\n\nTried URL source: {url_source or 'none'}, KEY source: {key_source or 'none'}."
         )
 
     return create_client(url, key)
