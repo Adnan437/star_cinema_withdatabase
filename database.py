@@ -2,46 +2,41 @@
 database.py
 Database access layer for Star Cinema.
 
-Keeps the same OOP idea as the original console project:
-  StarCinema (base class)  ->  Hall (child class)
-but now every read/write goes through MySQL instead of an in-memory list,
-so data survives restarts and multiple people can book at the same time.
+This version uses Supabase Postgres as the backend so the Streamlit app can be
+hosted live and read/write data in a cloud database.
 """
 
-import mysql.connector
+import os
 import streamlit as st
+from supabase import create_client, Client
 
 
-def get_connection():
-    """
-    Opens a MySQL connection.
-    - On Streamlit Cloud: reads credentials from st.secrets["mysql"]
-      (set these in the app's Settings -> Secrets).
-    - On your own PC (e.g. XAMPP): falls back to local defaults.
-    """
-    try:
-        cfg = st.secrets["mysql"]
-        return mysql.connector.connect(
-            host=cfg["host"],
-            port=int(cfg.get("port", 3306)),
-            user=cfg["user"],
-            password=cfg["password"],
-            database=cfg["database"],
+def get_supabase_client() -> Client:
+    """Return an authenticated Supabase client using Streamlit secrets or env vars."""
+    url = None
+    key = None
+
+    if "supabase" in st.secrets:
+        url = st.secrets["supabase"].get("url")
+        key = st.secrets["supabase"].get("key")
+
+    url = url or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+    key = key or os.environ.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
+
+    if not url or not key:
+        raise RuntimeError(
+            "Supabase credentials are missing. Set them in Streamlit secrets or environment variables."
         )
-    except Exception:
-        # Local development fallback (default XAMPP / MySQL settings)
-        return mysql.connector.connect(
-            host="localhost",
-            port=3306,
-            user="root",
-            password="",
-            database="star_cinema",
-        )
+
+    return create_client(url, key)
+
+
+def _count(response):
+    return response.count if getattr(response, "count", None) is not None else len(response.data or [])
 
 
 class StarCinema:
-    """Base class. hall_list is a class attribute shared by every Hall object,
-    same concept as the original console project."""
+    """Base class. hall_list is a class attribute shared by every Hall object."""
     hall_list = []
 
     def entry_hall(self, hall_no):
@@ -49,7 +44,7 @@ class StarCinema:
 
 
 class Hall(StarCinema):
-    """Represents one cinema hall. All data lives in MySQL."""
+    """Represents one cinema hall. All data lives in Supabase Postgres."""
 
     def __init__(self, hall_no="Hall 1"):
         self.hall_no = hall_no
@@ -63,169 +58,152 @@ class Hall(StarCinema):
     # SHOWS
     # ------------------------------------------------------------------
     def add_show(self, show_id, movie_name, show_time, rows, cols, price, color="#1f6fb2"):
-        conn = get_connection()
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                "INSERT INTO shows (show_id, movie_name, show_time, total_rows, "
-                "total_cols, ticket_price, poster_color) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                (show_id, movie_name, show_time, rows, cols, price, color),
-            )
-            seat_rows = [(show_id, r, c) for r in range(rows) for c in range(cols)]
-            cur.executemany(
-                "INSERT INTO seats (show_id, row_num, col_num, is_booked) VALUES (%s,%s,%s,FALSE)",
-                seat_rows,
-            )
-            conn.commit()
-            return True, "Show added successfully."
-        except mysql.connector.IntegrityError:
-            conn.rollback()
-            return False, "A show with that ID already exists. Choose a different ID."
-        except Exception as e:
-            conn.rollback()
-            return False, f"Could not add show: {e}"
-        finally:
-            cur.close()
-            conn.close()
+        supabase = get_supabase_client()
+
+        show_resp = supabase.table("shows").insert({
+            "show_id": show_id,
+            "movie_name": movie_name,
+            "show_time": show_time,
+            "total_rows": rows,
+            "total_cols": cols,
+            "ticket_price": price,
+            "poster_color": color,
+        }).execute()
+
+        if show_resp.error:
+            if "duplicate key" in str(show_resp.error.message).lower() or "already exists" in str(show_resp.error.message).lower():
+                return False, "A show with that ID already exists. Choose a different ID."
+            return False, f"Could not add show: {show_resp.error.message}"
+
+        seat_rows = [
+            {"show_id": show_id, "row_num": r, "col_num": c, "is_booked": False}
+            for r in range(rows)
+            for c in range(cols)
+        ]
+        seats_resp = supabase.table("seats").insert(seat_rows).execute()
+        if seats_resp.error:
+            supabase.table("shows").delete().eq("show_id", show_id).execute()
+            return False, f"Could not add show seats: {seats_resp.error.message}"
+
+        return True, "Show added successfully."
 
     def get_shows(self):
-        conn = get_connection()
-        cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT * FROM shows ORDER BY show_time")
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        return rows
+        supabase = get_supabase_client()
+        resp = supabase.table("shows").select("*").order("show_time", {"ascending": True}).execute()
+        return resp.data or []
 
     def get_show(self, show_id):
-        conn = get_connection()
-        cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT * FROM shows WHERE show_id = %s", (show_id,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        return row
+        supabase = get_supabase_client()
+        resp = supabase.table("shows").select("*").eq("show_id", show_id).execute()
+        return (resp.data or [None])[0]
 
     # ------------------------------------------------------------------
     # SEATS
     # ------------------------------------------------------------------
     def get_seat_grid(self, show_id, rows, cols):
         """Returns a rows x cols grid of True (free) / False (booked)."""
-        conn = get_connection()
-        cur = conn.cursor(dictionary=True)
-        cur.execute(
-            "SELECT row_num, col_num, is_booked FROM seats WHERE show_id = %s",
-            (show_id,),
-        )
-        data = cur.fetchall()
-        cur.close()
-        conn.close()
-
+        supabase = get_supabase_client()
+        resp = supabase.table("seats").select("row_num,col_num,is_booked").eq("show_id", show_id).execute()
         grid = [[True for _ in range(cols)] for _ in range(rows)]
-        for d in data:
-            grid[d["row_num"]][d["col_num"]] = not bool(d["is_booked"])
+        for seat in resp.data or []:
+            grid[seat["row_num"]][seat["col_num"]] = not bool(seat["is_booked"])
         return grid
 
     def available_seat_count(self, show_id):
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) FROM seats WHERE show_id=%s AND is_booked=FALSE", (show_id,)
+        supabase = get_supabase_client()
+        resp = (
+            supabase.table("seats")
+            .select("id", count="exact")
+            .eq("show_id", show_id)
+            .eq("is_booked", False)
+            .execute()
         )
-        count = cur.fetchone()[0]
-        cur.close()
-        conn.close()
-        return count
+        return _count(resp)
 
     # ------------------------------------------------------------------
     # BOOKING
     # ------------------------------------------------------------------
     def book_seats(self, show_id, name, phone, seat_list, price_per_seat):
-        """
-        seat_list: list of (row, col) tuples.
-        Locks the rows being booked (FOR UPDATE) so two people can't grab
-        the same seat at the same time, checks availability, then books
-        everything in a single transaction (all-or-nothing).
-        """
-        conn = get_connection()
-        cur = conn.cursor()
-        try:
-            for r, c in seat_list:
-                cur.execute(
-                    "SELECT is_booked FROM seats WHERE show_id=%s AND row_num=%s "
-                    "AND col_num=%s FOR UPDATE",
-                    (show_id, r, c),
-                )
-                result = cur.fetchone()
-                if result is None or result[0]:
-                    conn.rollback()
-                    label = Hall.seat_label(r, c)
-                    return False, f"Seat {label} is already booked. Please choose another seat.", None
+        supabase = get_supabase_client()
+        updated = []
 
-            for r, c in seat_list:
-                cur.execute(
-                    "UPDATE seats SET is_booked=TRUE WHERE show_id=%s AND row_num=%s AND col_num=%s",
-                    (show_id, r, c),
-                )
-
-            seat_labels = ", ".join(Hall.seat_label(r, c) for r, c in seat_list)
-            total = len(seat_list) * price_per_seat
-            cur.execute(
-                "INSERT INTO bookings (show_id, customer_name, phone, seat_labels, total_price) "
-                "VALUES (%s,%s,%s,%s,%s)",
-                (show_id, name, phone, seat_labels, total),
+        for r, c in seat_list:
+            seat_resp = (
+                supabase.table("seats")
+                .update({"is_booked": True})
+                .eq("show_id", show_id)
+                .eq("row_num", r)
+                .eq("col_num", c)
+                .eq("is_booked", False)
+                .execute()
             )
-            ticket_no = cur.lastrowid
-            conn.commit()
-            return True, "ok", {"ticket_no": ticket_no, "total": total, "seat_labels": seat_labels}
-        except Exception as e:
-            conn.rollback()
-            return False, f"Booking failed: {e}", None
-        finally:
-            cur.close()
-            conn.close()
+            if seat_resp.error or not (seat_resp.data and len(seat_resp.data) > 0):
+                for ur, uc in updated:
+                    supabase.table("seats").update({"is_booked": False}).eq("show_id", show_id).eq("row_num", ur).eq("col_num", uc).execute()
+                label = Hall.seat_label(r, c)
+                return False, f"Seat {label} is already booked. Please choose another seat.", None
+            updated.append((r, c))
+
+        seat_labels = ", ".join(Hall.seat_label(r, c) for r, c in seat_list)
+        total = len(seat_list) * price_per_seat
+        booking_resp = (
+            supabase.table("bookings")
+            .insert({
+                "show_id": show_id,
+                "customer_name": name,
+                "phone": phone,
+                "seat_labels": seat_labels,
+                "total_price": total,
+            })
+            .execute()
+        )
+
+        if booking_resp.error or not (booking_resp.data and len(booking_resp.data) > 0):
+            for ur, uc in updated:
+                supabase.table("seats").update({"is_booked": False}).eq("show_id", show_id).eq("row_num", ur).eq("col_num", uc).execute()
+            error_message = booking_resp.error.message if booking_resp.error else "Unknown booking error."
+            return False, f"Booking failed: {error_message}", None
+
+        ticket_no = booking_resp.data[0].get("ticket_no")
+        return True, "ok", {"ticket_no": ticket_no, "total": total, "seat_labels": seat_labels}
 
     def cancel_booking(self, ticket_no):
         """Admin action: cancel a booking and free up its seats."""
-        conn = get_connection()
-        cur = conn.cursor(dictionary=True)
-        try:
-            cur.execute(
-                "SELECT show_id, seat_labels FROM bookings WHERE ticket_no=%s", (ticket_no,)
-            )
-            booking = cur.fetchone()
-            if not booking:
-                return False, "Booking not found."
+        supabase = get_supabase_client()
+        resp = supabase.table("bookings").select("*").eq("ticket_no", ticket_no).execute()
+        booking = (resp.data or [None])[0]
+        if not booking:
+            return False, "Booking not found."
 
-            for label in booking["seat_labels"].split(", "):
-                r = ord(label[0]) - 65
-                c = int(label[1:])
-                cur.execute(
-                    "UPDATE seats SET is_booked=FALSE WHERE show_id=%s AND row_num=%s AND col_num=%s",
-                    (booking["show_id"], r, c),
-                )
+        for label in booking["seat_labels"].split(", "):
+            r = ord(label[0]) - 65
+            c = int(label[1:])
+            supabase.table("seats").update({"is_booked": False}).eq("show_id", booking["show_id"]).eq("row_num", r).eq("col_num", c).execute()
 
-            cur.execute("DELETE FROM bookings WHERE ticket_no=%s", (ticket_no,))
-            conn.commit()
-            return True, "Booking cancelled and seats released."
-        except Exception as e:
-            conn.rollback()
-            return False, f"Could not cancel booking: {e}"
-        finally:
-            cur.close()
-            conn.close()
+        delete_resp = supabase.table("bookings").delete().eq("ticket_no", ticket_no).execute()
+        if delete_resp.error:
+            return False, f"Could not cancel booking: {delete_resp.error.message}"
+        return True, "Booking cancelled and seats released."
 
     def get_all_bookings(self):
         """Admin action: full list of booked seats / tickets, newest first."""
-        conn = get_connection()
-        cur = conn.cursor(dictionary=True)
-        cur.execute(
-            "SELECT b.ticket_no, b.customer_name, b.phone, b.seat_labels, b.total_price, "
-            "b.booked_at, s.movie_name, s.show_time, s.show_id "
-            "FROM bookings b JOIN shows s ON b.show_id = s.show_id "
-            "ORDER BY b.booked_at DESC"
-        )
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+        supabase = get_supabase_client()
+        bookings_resp = supabase.table("bookings").select("*").order("booked_at", {"ascending": False}).execute()
+        show_lookup = {show["show_id"]: show for show in self.get_shows()}
+        rows = []
+        for booking in bookings_resp.data or []:
+            show = show_lookup.get(booking["show_id"], {})
+            rows.append(
+                {
+                    "ticket_no": booking["ticket_no"],
+                    "customer_name": booking["customer_name"],
+                    "phone": booking["phone"],
+                    "seat_labels": booking["seat_labels"],
+                    "total_price": booking["total_price"],
+                    "booked_at": booking["booked_at"],
+                    "movie_name": show.get("movie_name", "Unknown"),
+                    "show_time": show.get("show_time", ""),
+                    "show_id": booking["show_id"],
+                }
+            )
         return rows

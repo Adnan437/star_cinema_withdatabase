@@ -1,12 +1,11 @@
 """
 Star Cinema - Online Ticket Booking System
-Final project: Python (OOP) + Streamlit + MySQL
+Final project: Python (OOP) + Streamlit + Supabase
 
 Run locally with:
     python -m streamlit run app.py
 """
 
-import mysql.connector
 import streamlit as st
 
 from database import Hall
@@ -115,13 +114,13 @@ hall = Hall("Hall 1")
 # ---------------------------------------------------------------------------
 try:
     hall.get_shows()
-except mysql.connector.Error as e:
+except Exception as e:
     header("Database connection error")
     st.error(
-        "Could not connect to the MySQL database. Please make sure:\n\n"
-        "1. MySQL server is running (e.g. start it in XAMPP)\n"
-        "2. The `star_cinema` database has been created using `schema.sql`\n"
-        "3. Your connection details are correct in `.streamlit/secrets.toml`\n\n"
+        "Could not connect to Supabase. Please make sure:\n\n"
+        "1. Your Supabase credentials are configured in Streamlit secrets or environment variables.\n"
+        "2. `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are set.\n"
+        "3. The Supabase tables have been created using `schema.sql`.\n\n"
         f"Technical detail: {e}"
     )
     st.stop()
@@ -165,7 +164,7 @@ with st.sidebar:
         st.session_state.selected_seats = set()
         st.rerun()
     st.markdown("---")
-    st.caption("Star Cinema • Python + Streamlit + MySQL")
+    st.caption("Star Cinema • Python + Streamlit + Supabase")
 
 # ---------------------------------------------------------------------------
 # ADMIN LOGIN GATE
